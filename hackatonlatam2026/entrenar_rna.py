@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import random
 from deap import base, creator, tools, algorithms
+from genetico_v3 import preparar_ventana_semanal, mutar_nivel
 from sklearn.neural_network import MLPClassifier
 import joblib
 import matplotlib.pyplot as plt
