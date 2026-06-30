@@ -13,7 +13,9 @@ import pandas as pd
 import numpy as np
 import random
 from deap import base, creator, tools, algorithms
+import pandas as pd
 
+from scipy.interpolate import interp1d
 # =========================================================
 # 1. CARGA DE DATOS
 # =========================================================
@@ -26,9 +28,7 @@ df_batimetria = pd.read_csv('tabla_elevacion_volumen_FINAL.csv')
 # =========================================================
 # 2. PREPARACIÓN Y LIMPIEZA
 # =========================================================
-import pandas as pd
 
-from scipy.interpolate import interp1d
 
 def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria, fecha_inicio_str, semanas):
     """
