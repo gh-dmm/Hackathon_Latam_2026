@@ -59,6 +59,10 @@ def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria
         if 'Fecha' in df.columns:
             df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
             df = df.dropna(subset=['Fecha']).set_index('Fecha')
+        elif 'Timestamp (UTC-06:00)' in df.columns:
+            df.rename(columns={'Timestamp (UTC-06:00)': 'Fecha'}, inplace=True)
+            df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
+            df = df.dropna(subset=['Fecha']).set_index('Fecha')
         dataframes[i] = df
 
     df_lib_p, df_cambio_p, df_total_p, df_evap_p = dataframes
