@@ -122,22 +122,26 @@ def construir_resultado_ventana(base_dir: Path | None = None, fecha_inicio: str 
         s_acumulado[idx + 1] = s_acumulado[idx] + valor
     datos_opt["S_simulada"] = s_acumulado[1:]
 
-    fig, axes = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
-    axes[0].plot(datos_opt["Fecha"], datos_opt["R_obs"], label="R original", color="tab:blue")
-    axes[0].plot(datos_opt["Fecha"], datos_opt["u_opt"], label="Optimización genética", color="tab:orange")
-    axes[0].set_title("Comparación original vs optimización")
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    fig_comp, ax_comp = plt.subplots(figsize=(10, 5), constrained_layout=True)
+    ax_comp.plot(datos_opt["Fecha"], datos_opt["R_obs"], label="R original", color="tab:blue")
+    ax_comp.plot(datos_opt["Fecha"], datos_opt["u_opt"], label="Optimización genética", color="tab:orange")
+    ax_comp.set_title("Comparación original vs optimización")
+    ax_comp.legend()
+    ax_comp.grid(True, alpha=0.3)
 
-    axes[1].plot(datos_opt["Fecha"], datos_opt["S_simulada"], label="Storage simulado", color="tab:green")
-    axes[1].axhline(S_min, color="red", linestyle="--", label="Nivel crítico")
-    axes[1].set_title("Mejora genética")
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
+    fig_mejora, ax_mejora = plt.subplots(figsize=(10, 5), constrained_layout=True)
+    ax_mejora.plot(datos_opt["Fecha"], datos_opt["S_simulada"], label="Storage simulado", color="tab:green")
+    ax_mejora.axhline(S_min, color="red", linestyle="--", label="Nivel crítico")
+    ax_mejora.set_title("Mejora genética")
+    ax_mejora.legend()
+    ax_mejora.grid(True, alpha=0.3)
 
-    ruta_grafica = base_dir / "resultado_optimizacion.png"
-    fig.savefig(ruta_grafica, dpi=160)
-    plt.close(fig)
+    ruta_comparacion = base_dir / f"comparacion_{pd.Timestamp(fecha_inicio).strftime('%Y%m%d')}_{semanas}_semanas.png"
+    ruta_mejora = base_dir / f"mejora_{pd.Timestamp(fecha_inicio).strftime('%Y%m%d')}_{semanas}_semanas.png"
+    fig_comp.savefig(ruta_comparacion, dpi=160)
+    fig_mejora.savefig(ruta_mejora, dpi=160)
+    plt.close(fig_comp)
+    plt.close(fig_mejora)
 
     return {
         "fecha_inicio": pd.Timestamp(fecha_inicio),
@@ -146,64 +150,96 @@ def construir_resultado_ventana(base_dir: Path | None = None, fecha_inicio: str 
         "mejora_genetica": {
             "mejora_pct": round(float(mejora_pct), 2),
             "score": round(float(hof[0].fitness.values[0]), 6),
-            "ruta_grafica": str(ruta_grafica),
+            "ruta_grafica": str(ruta_comparacion),
         },
-        "ruta_grafica": str(ruta_grafica),
+        "ruta_grafica": str(ruta_comparacion),
+        "rutas_graficas": {
+            "comparacion": str(ruta_comparacion),
+            "mejora": str(ruta_mejora),
+        },
     }
+
+
+def _mostrar_popup_grafica(parent, ruta_imagen: str, titulo: str) -> None:
+    if not os.path.exists(ruta_imagen):
+        return
+    try:
+        from PIL import Image, ImageTk
+    except Exception:
+        return
+
+    ventana = parent.tk().Toplevel(parent) if hasattr(parent, "tk") else None
+    if ventana is None:
+        return
+    ventana.title(titulo)
+    imagen = Image.open(ruta_imagen)
+    imagen.thumbnail((900, 600))
+    foto = ImageTk.PhotoImage(imagen)
+    etiqueta = tk.Label(ventana, image=foto)
+    etiqueta.image = foto
+    etiqueta.pack(fill="both", expand=True)
 
 
 def ejecutar_interfaz() -> None:
     import tkinter as tk
-    from tkinter import simpledialog, messagebox
+    from tkinter import ttk, messagebox
+
+    try:
+        root = tk.Tk()
+    except Exception:
+        print("Tkinter no está disponible con un display gráfico en este entorno.")
+        print("Se generará la salida de la ventana como archivo PNG y se cerrará el proceso.")
+        base_dir = Path(__file__).resolve().parent
+        resultado = construir_resultado_ventana(base_dir, "2024-01-01", 26)
+        print(f"Gráficas generadas en: {resultado['ruta_grafica']} y {resultado['rutas_graficas']['mejora']}")
+        return
 
     base_dir = Path(__file__).resolve().parent
     fechas_disponibles = obtener_fechas_disponibles(base_dir)
     if not fechas_disponibles:
         messagebox.showerror("Sin datos", "No se encontraron fechas válidas en los datasets.")
+        root.destroy()
         return
 
-    root = tk.Tk()
-    root.withdraw()
+    root.title("Selección de ventana histórica")
+    root.geometry("450x260")
+    root.resizable(False, False)
 
-    fecha_str = simpledialog.askstring(
-        "Ventana histórica",
-        "Selecciona la fecha inicial de la ventana histórica:",
-        initialvalue=str(fechas_disponibles[0].date()),
-    )
-    if not fecha_str:
-        return
+    fecha_var = tk.StringVar(value=str(fechas_disponibles[0].date()))
+    semanas_var = tk.IntVar(value=26)
 
-    try:
-        fecha_inicio = pd.Timestamp(fecha_str)
-    except Exception:
-        messagebox.showerror("Fecha inválida", "Ingresa una fecha válida en formato YYYY-MM-DD.")
-        return
+    tk.Label(root, text="Fecha inicial de la ventana histórica", font=("Segoe UI", 11, "bold")).pack(pady=(16, 6))
+    combo_fechas = ttk.Combobox(root, textvariable=fecha_var, values=[str(f.date()) for f in fechas_disponibles], state="readonly", width=25)
+    combo_fechas.pack(pady=4)
 
-    opciones = [7, 26, 52]
-    semanas = simpledialog.askinteger(
-        "Semanas",
-        "¿Cuántas semanas tomar en cuenta? (7, 26 o 52)",
-        initialvalue=26,
-        minvalue=7,
-        maxvalue=52,
-    )
-    if semanas is None:
-        return
+    tk.Label(root, text="Semanas a considerar", font=("Segoe UI", 11, "bold")).pack(pady=(12, 6))
+    frame_semanas = tk.Frame(root)
+    frame_semanas.pack()
+    for valor in (7, 26, 52):
+        tk.Radiobutton(frame_semanas, text=f"{valor} semanas", variable=semanas_var, value=valor).pack(side="left", padx=8)
 
-    if semanas not in opciones:
-        semanas = 26 if semanas < 26 else 52
+    def ejecutar_analisis() -> None:
+        fecha_str = fecha_var.get()
+        semanas = semanas_var.get()
+        if not fecha_str:
+            messagebox.showwarning("Sin fecha", "Selecciona una fecha válida.")
+            return
+        try:
+            fecha_inicio = pd.Timestamp(fecha_str)
+        except Exception:
+            messagebox.showwarning("Fecha inválida", "La fecha seleccionada no es válida.")
+            return
 
-    resultado = construir_resultado_ventana(base_dir, fecha_inicio.strftime("%Y-%m-%d"), semanas)
+        resultado = construir_resultado_ventana(base_dir, fecha_inicio.strftime("%Y-%m-%d"), semanas)
+        messagebox.showinfo(
+            "Resultados",
+            f"Ventana: {resultado['fecha_inicio'].date()}\nSemanas: {resultado['semanas']}\nMejora estimada: {resultado['mejora_genetica']['mejora_pct']}%",
+        )
+        _mostrar_popup_grafica(root, resultado["rutas_graficas"]["comparacion"], "Comparación original vs optimización")
+        _mostrar_popup_grafica(root, resultado["rutas_graficas"]["mejora"], "Mejora genética")
 
-    messagebox.showinfo(
-        "Resultados",
-        f"Ventana: {resultado['fecha_inicio'].date()}\nSemanas: {resultado['semanas']}\nMejora estimada: {resultado['mejora_genetica']['mejora_pct']}%\nGráfica generada en: {resultado['ruta_grafica']}",
-    )
-
-    if os.path.exists(resultado["ruta_grafica"]):
-        from PIL import Image
-        img = Image.open(resultado["ruta_grafica"])
-        img.show()
+    tk.Button(root, text="Generar análisis", command=ejecutar_analisis, width=20, bg="#2e86de", fg="white").pack(pady=16)
+    root.mainloop()
 
 
 if __name__ == "__main__":
