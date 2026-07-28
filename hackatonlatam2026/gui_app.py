@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import html
 import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
+from urllib.parse import parse_qs, urlparse
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from deap import base, creator, tools, algorithms
+from deap import algorithms, base, creator, tools
 
 try:
     from .data_utils import cargar_datos_hidrologicos
@@ -115,6 +119,7 @@ def construir_resultado_ventana(base_dir: Path | None = None, fecha_inicio: str 
 
     fechas = pd.date_range(start=pd.Timestamp(fecha_inicio), periods=semanas, freq="W-SUN")
     datos_opt = pd.DataFrame({"Fecha": fechas, "R_obs": R_obs, "Delta_S_obs": Delta_S_obs, "u_opt": mejor_secuencia})
+    datos_opt["R_opt"] = datos_opt["R_obs"] + datos_opt["u_opt"]
     flujo = datos_opt["Delta_S_obs"].to_numpy() - datos_opt["u_opt"].to_numpy()
     s_acumulado = np.zeros(semanas + 1)
     s_acumulado[0] = S_inicial
@@ -122,9 +127,32 @@ def construir_resultado_ventana(base_dir: Path | None = None, fecha_inicio: str 
         s_acumulado[idx + 1] = s_acumulado[idx] + valor
     datos_opt["S_simulada"] = s_acumulado[1:]
 
+    ajustes_abs = np.abs(mejor_secuencia)
+    ajuste_total = float(np.sum(ajustes_abs))
+    semanas_aumento = int(np.sum(mejor_secuencia > 0))
+    semanas_disminucion = int(np.sum(mejor_secuencia < 0))
+    semanas_sin_cambio = int(np.sum(mejor_secuencia == 0))
+    max_ajuste = float(np.max(mejor_secuencia))
+    min_ajuste = float(np.min(mejor_secuencia))
+    descripcion_ajustes = (
+        "El optimizador ajusta la liberación original para generar la serie optimizada "
+        "R_opt = R_obs + u_opt."
+    )
+    if ajuste_total == 0.0:
+        descripcion_ajustes = (
+            "El optimizador no aplicó ningún ajuste: la serie optimizada coincide con la original. "
+            "Esto puede suceder cuando cualquier desviación viola una restricción o no mejora la función objetivo."
+        )
+    else:
+        descripcion_ajustes = (
+            f"El optimizador realizó ajustes en {semanas - semanas_sin_cambio} semanas, "
+            f"con {semanas_aumento} semanas de incremento y {semanas_disminucion} semanas de reducción. "
+            f"El mayor ajuste fue {max_ajuste:.2f} y el menor ajuste fue {min_ajuste:.2f}."
+        )
+
     fig_comp, ax_comp = plt.subplots(figsize=(10, 5), constrained_layout=True)
     ax_comp.plot(datos_opt["Fecha"], datos_opt["R_obs"], label="R original", color="tab:blue")
-    ax_comp.plot(datos_opt["Fecha"], datos_opt["u_opt"], label="Optimización genética", color="tab:orange")
+    ax_comp.plot(datos_opt["Fecha"], datos_opt["R_opt"], label="R optimizado", color="tab:orange")
     ax_comp.set_title("Comparación original vs optimización")
     ax_comp.legend()
     ax_comp.grid(True, alpha=0.3)
@@ -147,6 +175,15 @@ def construir_resultado_ventana(base_dir: Path | None = None, fecha_inicio: str 
         "fecha_inicio": pd.Timestamp(fecha_inicio),
         "semanas": semanas,
         "mejor_secuencia": mejor_secuencia,
+        "movimientos": {
+            "ajuste_total": round(ajuste_total, 2),
+            "max_ajuste": max_ajuste,
+            "min_ajuste": min_ajuste,
+            "semanas_aumento": semanas_aumento,
+            "semanas_disminucion": semanas_disminucion,
+            "semanas_sin_cambio": semanas_sin_cambio,
+            "descripcion": descripcion_ajustes,
+        },
         "mejora_genetica": {
             "mejora_pct": round(float(mejora_pct), 2),
             "score": round(float(hof[0].fitness.values[0]), 6),
@@ -160,86 +197,224 @@ def construir_resultado_ventana(base_dir: Path | None = None, fecha_inicio: str 
     }
 
 
-def _mostrar_popup_grafica(parent, ruta_imagen: str, titulo: str) -> None:
-    if not os.path.exists(ruta_imagen):
-        return
+def construir_pagina_web(fechas_disponibles: List[pd.Timestamp] | List[str], base_dir: Path | None = None) -> str:
+    fechas = []
+    for fecha in fechas_disponibles:
+        if isinstance(fecha, pd.Timestamp):
+            fechas.append(fecha.to_pydatetime().date().isoformat())
+        else:
+            fechas.append(str(fecha).split(" ")[0])
+
+    if not fechas:
+        fechas = ["2024-01-01"]
+
+    opciones = "".join(
+        f'<option value="{fecha}"{" selected" if idx == 0 else ""}>{fecha}</option>'
+        for idx, fecha in enumerate(fechas)
+    )
+    opciones_semanas = "".join(
+        f'<option value="{valor}"{" selected" if valor == 26 else ""}>{valor} semanas</option>'
+        for valor in (7, 26, 52)
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang=\"es\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>Optimización genética local</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; background: #f4f7fb; color: #1f2937; margin: 0; padding: 2rem; }}
+    .card {{ max-width: 760px; margin: 0 auto; background: white; padding: 2rem; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }}
+    h1 {{ margin-top: 0; }}
+    form {{ display: grid; gap: 1rem; }}
+    label {{ font-weight: 600; }}
+    select, button {{ padding: 0.7rem 0.95rem; font-size: 1rem; border-radius: 8px; border: 1px solid #cbd5e1; }}
+    button {{ background: #2563eb; color: white; border: none; cursor: pointer; }}
+    .hint {{ color: #64748b; font-size: 0.95rem; }}
+    .result {{ margin-top: 1.5rem; padding: 1rem; border-radius: 12px; background: #eff6ff; }}
+    img {{ width: 100%; height: auto; margin-top: 1rem; border-radius: 12px; border: 1px solid #dbeafe; }}
+  </style>
+</head>
+<body>
+  <div class=\"card\">
+    <h1>Optimización genética local</h1>
+    <p class=\"hint\">Selecciona una fecha histórica y el número de semanas para ejecutar el análisis y generar las gráficas.</p>
+    <form id=\"analisis-form\" action=\"/analizar\" method=\"post\">
+      <label for=\"fecha\">Fecha inicial</label>
+      <select id=\"fecha\" name=\"fecha\">
+        {opciones}
+      </select>
+      <label for=\"semanas\">Semanas a analizar</label>
+      <select id=\"semanas\" name=\"semanas\">
+        {opciones_semanas}
+      </select>
+      <button type=\"submit\">Generar análisis</button>
+    </form>
+    <div class=\"result\">La interfaz se ejecuta de forma local en el puerto 8000 y genera archivos PNG en la carpeta del proyecto.</div>
+  </div>
+</body>
+</html>"""
+
+
+def construir_pagina_resultado(resultado: Dict[str, Any], base_dir: Path | None = None) -> str:
+    base_dir = Path(base_dir or Path(__file__).resolve().parent)
+    comparacion = Path(resultado["rutas_graficas"]["comparacion"]).name
+    mejora = Path(resultado["rutas_graficas"]["mejora"]).name
+    return f"""<!DOCTYPE html>
+<html lang=\"es\">
+<head>
+  <meta charset=\"utf-8\">
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <title>Resultados del análisis</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; background: #f4f7fb; color: #1f2937; margin: 0; padding: 2rem; }}
+    .card {{ max-width: 960px; margin: 0 auto; background: white; padding: 2rem; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }}
+    h1 {{ margin-top: 0; }}
+    .metric {{ margin-bottom: 0.8rem; }}
+    .section {{ margin-top: 1.5rem; }}
+    .summary {{ background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 12px; padding: 1rem; margin-top: 1rem; }}
+    .summary p {{ margin: 0.4rem 0; }}
+    img {{ width: 100%; height: auto; margin: 1rem 0; border-radius: 12px; border: 1px solid #dbeafe; }}
+    a {{ color: #2563eb; }}
+  </style>
+</head>
+<body>
+  <div class=\"card\">
+    <h1>Resultados del análisis</h1>
+    <div class=\"metric\"><strong>Fecha:</strong> {resultado['fecha_inicio'].date()}</div>
+    <div class=\"metric\"><strong>Semanas:</strong> {resultado['semanas']}</div>
+    <div class=\"metric\"><strong>Mejora estimada:</strong> {resultado['mejora_genetica']['mejora_pct']}%</div>
+    <div class=\"metric\"><strong>Score:</strong> {resultado['mejora_genetica']['score']}</div>
+    <p><a href=\"/\">Volver al formulario</a></p>
+
+    <div class=\"section\">
+      <h2>Descripción de los movimientos de optimización</h2>
+      <div class=\"summary\">
+        <p>{html.escape(resultado['movimientos']['descripcion'])}</p>
+        <p><strong>Ajuste total absoluto:</strong> {resultado['movimientos']['ajuste_total']:.2f}</p>
+        <p><strong>Máximo ajuste:</strong> {resultado['movimientos']['max_ajuste']:.2f}</p>
+        <p><strong>Mínimo ajuste:</strong> {resultado['movimientos']['min_ajuste']:.2f}</p>
+        <p><strong>Semanas de aumento:</strong> {resultado['movimientos']['semanas_aumento']}</p>
+        <p><strong>Semanas de disminución:</strong> {resultado['movimientos']['semanas_disminucion']}</p>
+        <p><strong>Semanas sin cambio:</strong> {resultado['movimientos']['semanas_sin_cambio']}</p>
+      </div>
+    </div>
+
+    <div class=\"section\">
+      <h2>Comparación original vs optimización</h2>
+      <img src=\"/{comparacion}\" alt=\"Gráfica comparación\" />
+    </div>
+
+    <div class=\"section\">
+      <h2>Mejora genética</h2>
+      <img src=\"/{mejora}\" alt=\"Gráfica mejora genética\" />
+    </div>
+  </div>
+</body>
+</html>"""
+
+
+def procesar_analisis_web(payload: Dict[str, Any] | None, base_dir: Path | None = None) -> Dict[str, Any]:
+    datos = payload or {}
+    fecha_str = datos.get("fecha") or datos.get("fecha_inicio") or "2024-01-01"
+    semanas = datos.get("semanas", "26")
     try:
-        from PIL import Image, ImageTk
-    except Exception:
+        semanas_int = int(semanas)
+    except (TypeError, ValueError):
+        semanas_int = 26
+    return construir_resultado_ventana(base_dir, fecha_str, semanas_int)
+
+
+class _WebAppHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
+            self._send_html(construir_pagina_web(obtener_fechas_disponibles(self.base_dir)))
+            return
+        if parsed.path == "/health":
+            self._send_json({"status": "ok"})
+            return
+        self._serve_file(parsed.path)
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path != "/analizar":
+            self.send_error(404)
+            return
+
+        content_length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(content_length).decode("utf-8")
+        payload = {key: values[0] if values else "" for key, values in parse_qs(body, keep_blank_values=True).items()}
+        resultado = procesar_analisis_web(payload, self.base_dir)
+        self._send_html(construir_pagina_resultado(resultado, self.base_dir))
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
 
-    ventana = parent.tk().Toplevel(parent) if hasattr(parent, "tk") else None
-    if ventana is None:
-        return
-    ventana.title(titulo)
-    imagen = Image.open(ruta_imagen)
-    imagen.thumbnail((900, 600))
-    foto = ImageTk.PhotoImage(imagen)
-    etiqueta = tk.Label(ventana, image=foto)
-    etiqueta.image = foto
-    etiqueta.pack(fill="both", expand=True)
+    def _send_html(self, html_text: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html_text.encode("utf-8"))))
+        self.end_headers()
+        self.wfile.write(html_text.encode("utf-8"))
+
+    def _send_json(self, payload: Dict[str, Any]) -> None:
+        body = str(payload).replace("'", '"')
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body.encode("utf-8"))))
+        self.end_headers()
+        self.wfile.write(body.encode("utf-8"))
+
+    def _serve_file(self, path: str) -> None:
+        if path.startswith("/"):
+            path = path[1:]
+        file_path = (self.base_dir / path).resolve()
+        if not str(file_path).startswith(str(self.base_dir.resolve())):
+            self.send_error(403)
+            return
+        if not file_path.exists() or not file_path.is_file():
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", self._content_type(file_path))
+        self.send_header("Content-Length", str(file_path.stat().st_size))
+        self.end_headers()
+        with file_path.open("rb") as handle:
+            self.wfile.write(handle.read())
+
+    @staticmethod
+    def _content_type(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".png":
+            return "image/png"
+        if suffix == ".jpg" or suffix == ".jpeg":
+            return "image/jpeg"
+        if suffix == ".css":
+            return "text/css; charset=utf-8"
+        return "application/octet-stream"
 
 
-def ejecutar_interfaz() -> None:
-    import tkinter as tk
-    from tkinter import ttk, messagebox
+def _build_handler(base_dir: Path) -> type[_WebAppHandler]:
+    class Handler(_WebAppHandler):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.base_dir = base_dir
+            super().__init__(*args, **kwargs)
 
-    try:
-        root = tk.Tk()
-    except Exception:
-        print("Tkinter no está disponible con un display gráfico en este entorno.")
-        print("Se generará la salida de la ventana como archivo PNG y se cerrará el proceso.")
-        base_dir = Path(__file__).resolve().parent
-        resultado = construir_resultado_ventana(base_dir, "2024-01-01", 26)
-        print(f"Gráficas generadas en: {resultado['ruta_grafica']} y {resultado['rutas_graficas']['mejora']}")
-        return
+    return Handler
 
+
+def ejecutar_interfaz(host: str = "127.0.0.1", port: int = 8000) -> None:
     base_dir = Path(__file__).resolve().parent
-    fechas_disponibles = obtener_fechas_disponibles(base_dir)
-    if not fechas_disponibles:
-        messagebox.showerror("Sin datos", "No se encontraron fechas válidas en los datasets.")
-        root.destroy()
-        return
-
-    root.title("Selección de ventana histórica")
-    root.geometry("450x260")
-    root.resizable(False, False)
-
-    fecha_var = tk.StringVar(value=str(fechas_disponibles[0].date()))
-    semanas_var = tk.IntVar(value=26)
-
-    tk.Label(root, text="Fecha inicial de la ventana histórica", font=("Segoe UI", 11, "bold")).pack(pady=(16, 6))
-    combo_fechas = ttk.Combobox(root, textvariable=fecha_var, values=[str(f.date()) for f in fechas_disponibles], state="readonly", width=25)
-    combo_fechas.pack(pady=4)
-
-    tk.Label(root, text="Semanas a considerar", font=("Segoe UI", 11, "bold")).pack(pady=(12, 6))
-    frame_semanas = tk.Frame(root)
-    frame_semanas.pack()
-    for valor in (7, 26, 52):
-        tk.Radiobutton(frame_semanas, text=f"{valor} semanas", variable=semanas_var, value=valor).pack(side="left", padx=8)
-
-    def ejecutar_analisis() -> None:
-        fecha_str = fecha_var.get()
-        semanas = semanas_var.get()
-        if not fecha_str:
-            messagebox.showwarning("Sin fecha", "Selecciona una fecha válida.")
-            return
-        try:
-            fecha_inicio = pd.Timestamp(fecha_str)
-        except Exception:
-            messagebox.showwarning("Fecha inválida", "La fecha seleccionada no es válida.")
-            return
-
-        resultado = construir_resultado_ventana(base_dir, fecha_inicio.strftime("%Y-%m-%d"), semanas)
-        messagebox.showinfo(
-            "Resultados",
-            f"Ventana: {resultado['fecha_inicio'].date()}\nSemanas: {resultado['semanas']}\nMejora estimada: {resultado['mejora_genetica']['mejora_pct']}%",
-        )
-        _mostrar_popup_grafica(root, resultado["rutas_graficas"]["comparacion"], "Comparación original vs optimización")
-        _mostrar_popup_grafica(root, resultado["rutas_graficas"]["mejora"], "Mejora genética")
-
-    tk.Button(root, text="Generar análisis", command=ejecutar_analisis, width=20, bg="#2e86de", fg="white").pack(pady=16)
-    root.mainloop()
+    handler_cls = _build_handler(base_dir)
+    server = ThreadingHTTPServer((host, port), handler_cls)
+    print(f"Interfaz web local lista en http://{host}:{port}")
+    print("Abre esa URL en tu navegador para usar la aplicación.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("Servidor detenido.")
 
 
 if __name__ == "__main__":
