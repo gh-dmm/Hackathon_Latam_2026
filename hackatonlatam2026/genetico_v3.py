@@ -49,10 +49,13 @@ def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria
     dataframes = [df_lib.copy(), df_cambio.copy(), df_total.copy(), df_evap.copy()]
     for i, df in enumerate(dataframes):
         df = df.copy()
-        df.columns = df.columns.str.strip()
+        df.columns = [str(c).strip() for c in df.columns]
         if 'Timestamp (UTC-06:00)' in df.columns: df.rename(columns={'Timestamp (UTC-06:00)': 'Fecha'}, inplace=True)
+        if 'Inicio de intervalo (UTC-06:00)' in df.columns: df.rename(columns={'Inicio de intervalo (UTC-06:00)': 'Fecha'}, inplace=True)
         if 'Value (mm)' in df.columns: df.rename(columns={'Value (mm)': 'Evaporacion_mm'}, inplace=True)
         if 'Value (TCM)' in df.columns: df.rename(columns={'Value (TCM)': 'Value (TCM)'}, inplace=True)
+        if 'Valor' not in df.columns and 'Value' in df.columns:
+            df.rename(columns={'Value': 'Valor'}, inplace=True)
         if 'Fecha' in df.columns:
             df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
             df = df.dropna(subset=['Fecha']).set_index('Fecha')
@@ -72,10 +75,15 @@ def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria
     f_area = interp1d(vol, area, kind='linear', fill_value="extrapolate")
 
     # 3. Agrupación Semanal
-    lib_semanal = df_lib_p['Valor'].resample('W-SUN').mean() * 604.8
-    cambio_semanal = df_cambio_p['Value (TCM)'].resample('W-SUN').sum()
-    total_semanal = df_total_p['Value (TCM)'].resample('W-SUN').first()
-    evap_semanal_mm = df_evap_p['Evaporacion_mm'].resample('W-SUN').sum()
+    columna_lib = 'Valor' if 'Valor' in df_lib_p.columns else 'Value'
+    columna_cambio = 'Value (TCM)' if 'Value (TCM)' in df_cambio_p.columns else df_cambio_p.columns[0]
+    columna_total = 'Value (TCM)' if 'Value (TCM)' in df_total_p.columns else df_total_p.columns[0]
+    columna_evap = 'Evaporacion_mm' if 'Evaporacion_mm' in df_evap_p.columns else df_evap_p.columns[1] if len(df_evap_p.columns) > 1 else df_evap_p.columns[0]
+
+    lib_semanal = df_lib_p[columna_lib].resample('W-SUN').mean() * 604.8
+    cambio_semanal = df_cambio_p[columna_cambio].resample('W-SUN').sum()
+    total_semanal = df_total_p[columna_total].resample('W-SUN').first()
+    evap_semanal_mm = df_evap_p[columna_evap].resample('W-SUN').sum()
 
     # 4. Cálculo de Evaporación Dinámica
     # Obtenemos el volumen histórico para cada semana y calculamos el área

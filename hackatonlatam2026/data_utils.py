@@ -21,6 +21,11 @@ def limpiar_dataset(df):
         df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce", dayfirst=True)
         df = df.dropna(subset=["Fecha"]).set_index("Fecha")
 
+    if "Value (mm)" in df.columns:
+        df.rename(columns={"Value (mm)": "Evaporacion_mm"}, inplace=True)
+    elif "Value (m)" in df.columns:
+        df.rename(columns={"Value (m)": "Valor"}, inplace=True)
+
     return df
 
 
