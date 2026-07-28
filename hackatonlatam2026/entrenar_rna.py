@@ -1,34 +1,54 @@
-import pandas as pd
-import numpy as np
-import random
-from deap import base, creator, tools, algorithms
-from genetico_v3 import preparar_ventana_semanal, mutar_nivel
-from sklearn.neural_network import MLPClassifier
+import os
+import warnings
+from pathlib import Path
+
 import joblib
 import matplotlib.pyplot as plt
-import warnings
+import numpy as np
+import pandas as pd
+from sklearn.neural_network import MLPClassifier
+
+try:
+    from .data_utils import cargar_datos_hidrologicos
+    from .genetico_v3 import preparar_ventana_semanal, mutar_nivel
+except ImportError:  # pragma: no cover - fallback para ejecución directa
+    from data_utils import cargar_datos_hidrologicos
+    from genetico_v3 import preparar_ventana_semanal, mutar_nivel
+
 warnings.filterwarnings('ignore')
 
 # =========================================================
 # 1. CARGA Y PREPARACIÓN SEMANAL (Igual al Genético)
 # =========================================================
 print("Cargando y procesando datos históricos...")
-df_lib = pd.read_excel("R_observ.xlsx")
-df_cambio = pd.read_csv("Cambio_almacenamiento_historico.csv")
-df_total = pd.read_csv("DataSetExport-Total Storage.csv")
+base_dir = Path(__file__).resolve().parent
+if not os.path.exists(base_dir / "R_observ.xlsx"):
+    base_dir = Path.cwd()
+
+datos = cargar_datos_hidrologicos(base_dir)
+df_lib = datos['lib']
+df_cambio = datos['cambio']
+df_total = datos['total']
 
 def limpiar_dataset(df):
+    df = df.copy()
     df.columns = df.columns.str.strip()
     if 'Timestamp (UTC-06:00)' in df.columns:
         df.rename(columns={'Timestamp (UTC-06:00)': 'Fecha'}, inplace=True)
     if 'Fecha' in df.columns:
-        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
         df = df.dropna(subset=['Fecha']).set_index('Fecha')
     return df
 
-df_lib = limpiar_dataset(df_lib)
-df_cambio = limpiar_dataset(df_cambio)
-df_total = limpiar_dataset(df_total)
+
+# Las funciones de carga ya devuelven DataFrames limpios
+# pero mantenemos la compatibilidad con el script original
+if not isinstance(df_lib.index, pd.DatetimeIndex):
+    df_lib = limpiar_dataset(df_lib)
+if not isinstance(df_cambio.index, pd.DatetimeIndex):
+    df_cambio = limpiar_dataset(df_cambio)
+if not isinstance(df_total.index, pd.DatetimeIndex):
+    df_total = limpiar_dataset(df_total)
 
 # Agrupación Semanal
 lib_semanal = df_lib['Valor'].resample('W-SUN').mean() * 604.8
@@ -121,7 +141,9 @@ y_train_cat = y_train.astype(str)
 rna = MLPClassifier(hidden_layer_sizes=(15, 10), max_iter=1500, random_state=42)
 rna.fit(X_train, y_train_cat)
 
-joblib.dump(rna, 'modelo_rna_genetico.pkl')
+output_path = base_dir / 'modelo_rna_genetico.pkl'
+joblib.dump(rna, output_path)
+print(f"\n¡Éxito! Modelo RNA entrenado y guardado como '{output_path}'.")
 print("\n¡Éxito! Modelo RNA entrenado y guardado como 'modelo_rna_genetico.pkl'.")
 
 plt.plot(rna.loss_curve_, color='teal')

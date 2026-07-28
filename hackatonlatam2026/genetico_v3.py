@@ -9,22 +9,33 @@ Original file is located at
 
 
 
-import pandas as pd
-import numpy as np
+import os
 import random
-from deap import base, creator, tools, algorithms
-import pandas as pd
+from pathlib import Path
 
+import numpy as np
+import pandas as pd
+from deap import base, creator, tools, algorithms
 from scipy.interpolate import interp1d
+
+try:
+    from .data_utils import cargar_datos_hidrologicos
+except ImportError:  # pragma: no cover - fallback para ejecución directa
+    from data_utils import cargar_datos_hidrologicos
+
 # =========================================================
 # 1. CARGA DE DATOS
 # =========================================================
-# Asegúrate de que los nombres de los archivos coincidan exactamente
-df_lib = pd.read_excel("R_observ.xlsx")
-df_cambio = pd.read_csv("Cambio_almacenamiento_historico.csv")
-df_total = pd.read_csv("DataSetExport-Total Storage.csv")
-df_evap = pd.read_csv("DataSetExport-Evaporation,accumltd.Daily Evaporation - mm@08461200-Instantaneous-mm-20260622185804.csv", skiprows=1)
-df_batimetria = pd.read_csv('tabla_elevacion_volumen_FINAL.csv')
+base_dir = Path(__file__).resolve().parent
+if not os.path.exists(base_dir / "R_observ.xlsx"):
+    base_dir = Path.cwd()
+
+archivos = cargar_datos_hidrologicos(base_dir)
+df_lib = archivos["lib"]
+df_cambio = archivos["cambio"]
+df_total = archivos["total"]
+df_evap = archivos["evap"]
+df_batimetria = archivos["batimetria"]
 # =========================================================
 # 2. PREPARACIÓN Y LIMPIEZA
 # =========================================================
@@ -37,12 +48,13 @@ def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria
     # 1. Limpieza de datos (igual a tu lógica original)
     dataframes = [df_lib.copy(), df_cambio.copy(), df_total.copy(), df_evap.copy()]
     for i, df in enumerate(dataframes):
+        df = df.copy()
         df.columns = df.columns.str.strip()
         if 'Timestamp (UTC-06:00)' in df.columns: df.rename(columns={'Timestamp (UTC-06:00)': 'Fecha'}, inplace=True)
         if 'Value (mm)' in df.columns: df.rename(columns={'Value (mm)': 'Evaporacion_mm'}, inplace=True)
-        
+        if 'Value (TCM)' in df.columns: df.rename(columns={'Value (TCM)': 'Value (TCM)'}, inplace=True)
         if 'Fecha' in df.columns:
-            df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+            df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce', dayfirst=True)
             df = df.dropna(subset=['Fecha']).set_index('Fecha')
         dataframes[i] = df
 
@@ -51,7 +63,9 @@ def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria
     # 2. Preparar el interpolador de área (Volumen TCM -> Área km2)
     # Calculamos área (km2) como dV/dh (o aproximación dV/dV)
     # Nota: Tu CSV tiene volumen en TCM y Mm3, usaremos volumen_TCM
-    vol = df_batimetria['volume_TCM'].values
+    df_batimetria = df_batimetria.copy()
+    df_batimetria.columns = [str(c).strip() for c in df_batimetria.columns]
+    vol = df_batimetria['volume_TCM'].dropna().astype(float).values
     # Calculamos área como el cambio de volumen entre pasos de elevación
     # dV_TCM / dh_m = área en km2
     area = np.gradient(df_batimetria['volume_TCM'], df_batimetria['elevation_m'])
@@ -218,6 +232,8 @@ def correr_modelo():
 
 if __name__ == "__main__":
     poblacion_final, estadisticas, salon_de_la_fama, mejor_secuencia = correr_modelo()
+else:
+    mejor_secuencia = None
 
 def auditar_restricciones(secuencia_u, R_obs, Delta_S_obs, S_inicial, S_max, niveles_permitidos):
     """

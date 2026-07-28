@@ -1,12 +1,20 @@
-import pandas as pd
+import os
+from pathlib import Path
+
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
-import joblib
+import pandas as pd
+
+try:
+    from .data_utils import cargar_datos_hidrologicos
+except ImportError:  # pragma: no cover - fallback para ejecución directa
+    from data_utils import cargar_datos_hidrologicos
 
 # ==============================================================================
 # 1. CONFIGURACIÓN INICIAL
 # ==============================================================================
-S_inicial = 1000000 
+S_inicial = 1000000
 V_max = 3387000
 S_min = 0.25 * V_max
 
@@ -14,20 +22,22 @@ S_min = 0.25 * V_max
 # 2. CARGAR MODELO Y ESTADÍSTICAS HISTÓRICAS
 # ==============================================================================
 print("--- Cargando Modelo de Control RNA (Basado en Genético) ---")
+base_dir = Path(__file__).resolve().parent
+if not os.path.exists(base_dir / "modelo_rna_genetico.pkl"):
+    base_dir = Path.cwd()
+
 try:
-    rna = joblib.load('modelo_rna_genetico.pkl')
+    rna = joblib.load(base_dir / 'modelo_rna_genetico.pkl')
 except FileNotFoundError:
-    print("Error: Ejecuta 'entrenar_rna_genetico.py' primero.")
+    print("Error: Ejecuta 'entrenar_rna.py' primero.")
     exit()
 
-# Para proyectar el futuro necesitamos la media y desviación del Delta S histórico
-# Cargamos un resumen rápido de los datos
-df_cambio = pd.read_csv("Cambio_almacenamiento_historico.csv")
-df_cambio.columns = df_cambio.columns.str.strip()
-if 'Timestamp (UTC-06:00)' in df.columns:
-    df_cambio.rename(columns={'Timestamp (UTC-06:00)': 'Fecha'}, inplace=True)
-df_cambio['Fecha'] = pd.to_datetime(df_cambio['Fecha'], errors='coerce')
-cambio_semanal = df_cambio.set_index('Fecha')['Value (TCM)'].resample('W-SUN').sum()
+archivos = cargar_datos_hidrologicos(base_dir)
+df_cambio = archivos['cambio']
+if 'Value (TCM)' in df_cambio.columns:
+    cambio_semanal = df_cambio['Value (TCM)'].resample('W-SUN').sum()
+else:
+    cambio_semanal = df_cambio.iloc[:, 0].resample('W-SUN').sum()
 
 mean_delta = cambio_semanal.mean()
 std_delta = cambio_semanal.std()
