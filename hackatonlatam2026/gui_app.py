@@ -11,8 +11,12 @@ import numpy as np
 import pandas as pd
 from deap import base, creator, tools, algorithms
 
-from .data_utils import cargar_datos_hidrologicos
-from .genetico_v3 import preparar_ventana_semanal
+try:
+    from .data_utils import cargar_datos_hidrologicos
+    from .genetico_v3 import preparar_ventana_semanal
+except ImportError:  # pragma: no cover - fallback para ejecución directa
+    from data_utils import cargar_datos_hidrologicos
+    from genetico_v3 import preparar_ventana_semanal
 
 
 def obtener_fechas_disponibles(base_dir: Path | None = None) -> List[pd.Timestamp]:
