@@ -72,6 +72,13 @@ def preparar_ventana_semanal(df_lib, df_cambio, df_total, df_evap, df_batimetria
     # Nota: Tu CSV tiene volumen en TCM y Mm3, usaremos volumen_TCM
     df_batimetria = df_batimetria.copy()
     df_batimetria.columns = [str(c).strip() for c in df_batimetria.columns]
+    if 'elevation_m' not in df_batimetria.columns:
+        df_batimetria = df_batimetria.rename(columns={c: 'elevation_m' for c in df_batimetria.columns if 'elevation' in str(c).lower()})
+    if 'volume_TCM' not in df_batimetria.columns:
+        df_batimetria = df_batimetria.rename(columns={c: 'volume_TCM' for c in df_batimetria.columns if 'volume' in str(c).lower()})
+    df_batimetria['elevation_m'] = pd.to_numeric(df_batimetria['elevation_m'], errors='coerce')
+    df_batimetria['volume_TCM'] = pd.to_numeric(df_batimetria['volume_TCM'], errors='coerce')
+    df_batimetria = df_batimetria.dropna(subset=['elevation_m', 'volume_TCM'])
     vol = df_batimetria['volume_TCM'].dropna().astype(float).values
     # Calculamos área como el cambio de volumen entre pasos de elevación
     # dV_TCM / dh_m = área en km2
@@ -315,4 +322,5 @@ def auditar_restricciones(secuencia_u, R_obs, Delta_S_obs, S_inicial, S_max, niv
 
 # Ejecutar la auditoría pasándole los resultados de tu modelo
 # Asegúrate de llamar esta función al final de tu script principal
-auditar_restricciones(mejor_secuencia, R_obs, Delta_S_obs, S_inicial, S_max, NIVELES_PERMITIDOS)
+if mejor_secuencia is not None:
+    auditar_restricciones(mejor_secuencia, R_obs, Delta_S_obs, S_inicial, S_max, NIVELES_PERMITIDOS)

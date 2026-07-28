@@ -6,6 +6,30 @@ import pandas as pd
 BASE_DIR = Path(__file__).resolve().parent
 
 
+def _leer_csv_robusto(path):
+    if path.suffix.lower() == ".xlsx":
+        return pd.read_excel(path)
+
+    with open(path, "r", encoding="utf-8-sig") as handle:
+        lines = handle.readlines()
+
+    header_idx = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if not stripped:
+            continue
+        if any(token in stripped for token in ["timestamp", "fecha", "inicio de intervalo", "fin del intervalo", "valor", "value", "elevation_m", "volume_tcm"]):
+            header_idx = idx
+            break
+
+    if header_idx is None:
+        return pd.read_csv(path, engine="python", encoding="utf-8-sig", low_memory=False)
+
+    sample = "".join(lines[header_idx:header_idx + 3])
+    sep = ";" if ";" in sample else ","
+    return pd.read_csv(path, sep=sep, skiprows=header_idx, engine="python", encoding="utf-8-sig")
+
+
 def limpiar_dataset(df):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -30,22 +54,22 @@ def limpiar_dataset(df):
     elif "Value (m)" in df.columns:
         df.rename(columns={"Value (m)": "Valor"}, inplace=True)
 
+    if "elevation_m" not in df.columns and "elevation" in df.columns:
+        df.rename(columns={"elevation": "elevation_m"}, inplace=True)
+    if "volume_TCM" not in df.columns and "volume" in df.columns:
+        df.rename(columns={"volume": "volume_TCM"}, inplace=True)
+
     return df
 
 
 def cargar_datos_hidrologicos(base_dir=None):
     base_dir = Path(base_dir or BASE_DIR)
 
-    def read_csv(path):
-        if path.suffix.lower() == ".xlsx":
-            return pd.read_excel(path)
-        return pd.read_csv(path, engine="python", encoding="utf-8-sig")
-
-    df_lib = read_csv(base_dir / "R_observ.xlsx")
-    df_cambio = read_csv(base_dir / "Cambio_almacenamiento_historico.csv")
-    df_total = read_csv(base_dir / "DataSetExport-Total Storage.csv")
-    df_evap = read_csv(base_dir / "DataSetExport-Evaporation,accumltd.Daily Evaporation - mm@08461200-Instantaneous-mm-20260622185804.csv")
-    df_batimetria = read_csv(base_dir / "tabla_elevacion_volumen_FINAL.csv")
+    df_lib = _leer_csv_robusto(base_dir / "R_observ.xlsx")
+    df_cambio = _leer_csv_robusto(base_dir / "Cambio_almacenamiento_historico.csv")
+    df_total = _leer_csv_robusto(base_dir / "DataSetExport-Total Storage.csv")
+    df_evap = _leer_csv_robusto(base_dir / "DataSetExport-Evaporation,accumltd.Daily Evaporation - mm@08461200-Instantaneous-mm-20260622185804.csv")
+    df_batimetria = _leer_csv_robusto(base_dir / "tabla_elevacion_volumen_FINAL.csv")
 
     return {
         "lib": limpiar_dataset(df_lib),
